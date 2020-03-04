@@ -171,7 +171,7 @@ data class WerewolfGame(val channel: MessageChannel) {
         narrator.privateChannel.sendMessage("The roles for this game are:\n${getRoleDisplay()}").queue()
     }
 
-    private fun getRoleDisplay(){
+    private fun getRoleDisplay(): String {
         return  players.joinToString("\n") { "${it.user.name}: ${it.role.toString().toLowerCase()}" }
     }
 
