@@ -4,23 +4,41 @@ import com.acuitybotting.discord.edn.DiscordBot
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.BroadcastChannel
 import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import net.dv8tion.jda.api.entities.MessageChannel
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent
 
-fun MessageChannel.firstMessage(messagePrefix: String? = null): Deferred<MessageReceivedEvent> = GlobalScope.async {
-    DiscordBot.messages.asFlow().first {
-        val contentDisplay = it.message.contentDisplay
-        if (messagePrefix != null && !contentDisplay.startsWith(messagePrefix, true)) return@first false
-        true
-    }
-}
 
-fun <T> MessageChannel.firstMatch(messagePrefix: String? = null, predicate: (MessageReceivedEvent) -> T): Deferred<T> = GlobalScope.async {
-    DiscordBot.messages.asFlow().first {
-        val contentDisplay = it.message.contentDisplay
-        if (messagePrefix != null && !contentDisplay.startsWith(messagePrefix, true)) return@first false
-        predicate.invoke(it)
+class KChannel {
+
+    val filters = mutableListOf<(MessageReceivedEvent) -> Boolean>()
+
+    fun filter(predicate: (MessageReceivedEvent) -> Boolean): KChannel {
+        filters.add(predicate)
+        return this
+    }
+
+    fun firstAsync() = GlobalScope.async {
+        first()
+    }
+
+    fun <T> mapAsync(transformer: (MessageReceivedEvent) -> T) = GlobalScope.async<T> {
+        while (isActive) {
+            try {
+                return@async transformer.invoke(first())
+            } catch (e: Throwable) {
+                e.printStackTrace()
+            }
+        }
+
+        throw IllegalStateException()
+    }
+
+    private suspend fun first(): MessageReceivedEvent {
+        return DiscordBot.messages.asFlow().first { filters.all { filter -> filter.invoke(it) } }
     }
 }

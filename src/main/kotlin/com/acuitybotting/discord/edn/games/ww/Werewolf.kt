@@ -11,11 +11,12 @@ object Werewolf {
 
     private val games = mutableMapOf<String, WerewolfGame>()
 
-
     fun start() {
         GlobalScope.launch {
             while (true) {
-                val event = async { DiscordBot.messages.asFlow().first { it.message.contentDisplay.startsWith("!werewolf new game") } }.await()
+                val event = DiscordBot.channel()
+                    .filter { it.message.contentDisplay.startsWith("!werewolf new game") }
+                    .firstAsync().await()
                 games[event.channel.id]?.stop()
                 games[event.channel.id] = WerewolfGame(event.channel).apply { start() }
             }

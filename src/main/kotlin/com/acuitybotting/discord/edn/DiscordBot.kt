@@ -1,6 +1,7 @@
 package com.acuitybotting.discord.edn
 
 import com.acuitybotting.discord.edn.games.ww.Werewolf
+import com.acuitybotting.discord.edn.jda.KChannel
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.BroadcastChannel
@@ -19,10 +20,11 @@ object DiscordBot {
 
     var messages = BroadcastChannel<MessageReceivedEvent>(1)
 
-
     fun start() {
         jda.addEventListener(MessageCollector())
     }
+
+    fun channel() = KChannel()
 
     private class MessageCollector : ListenerAdapter() {
         override fun onMessageReceived(event: MessageReceivedEvent) {

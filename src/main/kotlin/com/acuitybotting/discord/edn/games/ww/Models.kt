@@ -1,14 +1,12 @@
 package com.acuitybotting.discord.edn.games.ww
 
-import com.acuitybotting.discord.edn.jda.firstMessage
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
+import com.acuitybotting.discord.edn.DiscordBot
+import kotlinx.coroutines.*
 import net.dv8tion.jda.api.entities.MessageChannel
 import net.dv8tion.jda.api.entities.PrivateChannel
 import net.dv8tion.jda.api.entities.User
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 object WerewolfGameState {
 
@@ -21,88 +19,147 @@ enum class WerewolfRoles {
     WEREWOLF,
     VILLAGER,
     INVESTIGATOR
-
+    
 }
 
 data class WerewolfGame(val channel: MessageChannel) {
 
     private lateinit var job: Job
     private val players = mutableListOf<WerewolfUser>()
-    private lateinit var narratorChannel: PrivateChannel
-    private var night = 0
+    private lateinit var narrator: WerewolfUser
+    private var night = 1
+    private var userId = AtomicInteger(0)
 
     fun start() {
         job = GlobalScope.launch {
-            channel.sendMessage("Game starting! Type '!werewolf join' to join as a player. When all players have joined the narrator should type '!werewolf begin' to start the game.")
+            channel.sendMessage("Starting the game now! Type '!werewolf join' to join as a player. Once everyone has join the narrator should type '!werewolf narrator' to start the game.")
                 .queue()
 
             val joinJob = launch {
                 while (isActive) {
-                    val event = channel.firstMessage("!werewolf join").await()
+                    val event = DiscordBot.channel()
+                        .filter { it.message.contentDisplay.startsWith("!werewolf join", true) }
+                        .firstAsync().await()
+
                     event.author.openPrivateChannel().queue {
-                        players.add(WerewolfUser(event.author, it))
-                        channel.sendMessage("${event.author.name} has joined as a player!").queue()
+                        players.add(WerewolfUser(userId.getAndIncrement(), event.author, it))
+                        channel.sendMessage("${event.author.name} joined the game as a player!").queue()
                     }
                 }
             }
 
-            while (isActive) {
-                val event = channel.firstMessage("!werewolf begin").await()
+            narrator = DiscordBot.channel()
+                .filter { it.message.contentDisplay.startsWith("!werewolf narrator", true) }
+                .mapAsync {
+                    WerewolfUser(
+                        userId.getAndIncrement(),
+                        it.author,
+                        it.author.openPrivateChannel().completeAfter(10, TimeUnit.SECONDS)
+                    )
+                }.await()
 
-                players.removeIf { it.user.id == event.author.id }
-
-                if (players.size < 4) {
-                    channel.sendMessage("Sorry the game cannot begin with less than four players.").queue()
-                    continue
-                }
-
-                val privateChannel = event.author.openPrivateChannel().completeAfter(10, TimeUnit.SECONDS)
-                if (privateChannel != null) {
-                    narratorChannel = privateChannel
-                    channel.sendMessage("${event.author.name} has became the narrator and has started the game! Roles will be distributed now.")
-                        .queue()
-                    joinJob.cancel()
-                    break
-                }
-            }
+            joinJob.cancel()
+            channel.sendMessage("${narrator.user.name} became the narrator and started the game. Roles will be distributed now.")
+                .queue()
 
             distributeRoles()
 
             while (isActive) {
-                channel.sendMessage("Starting night $night. If you have a role you will be sent a message with instructions!").queue()
+                channel.sendMessage("It is night ${night}! If you have a role you will be pmed instructions now!")
+                    .queue()
 
-                val werewolfChoice =
-                    players.first { it.role == WerewolfRoles.WEREWOLF }.privateChannel
-                        .firstMessage("!kill ")
-                        .await()
+                val handelInvest = handelInvestAsync()
+                val handleWw = handelWWAsync()
 
-                println()
+                handleWw.await()
+                handelInvest.await()
 
+                if (checkWinConditions()) break
+
+                channel.sendMessage("When discussion and voting are done the narrator can move to the next night by typing '!werewolf hang' or '!werewolf skip'. ")
+                    .queue()
+
+                val nChoice = DiscordBot.channel()
+                    .filter {
+                        it.author.id == narrator.user.id && (it.message.contentDisplay.startsWith(
+                            "!werewolf hang",
+                            true
+                        ) || it.message.contentDisplay.startsWith(
+                            "!werewolf skip",
+                            true
+                        ))
+                    }
+                    .firstAsync().await()
+
+                if (nChoice.message.contentDisplay.contains("hang")) handleVoteAsync().await()
+
+                if (checkWinConditions()) break
+
+                night++
             }
         }
     }
 
-    private fun messsageWerewolfs(){
+    private fun checkWinConditions(): Boolean {
+        return false
+    }
 
+    private fun handleVoteAsync() = GlobalScope.async {
+        val display = players.filter { it.alive }.joinToString(
+            prefix = "Who was hung?\n",
+            separator = "\n"
+        ) { "${it.id}: ${it.user.name}" }
+        channel.sendMessage(display).queue()
+        val choice = DiscordBot.channel()
+            .mapAsync { players.first { user -> user.id == it.message.contentDisplay.toInt() } }.await()
+        choice.alive = false
+    }
+
+    private fun handelWWAsync() = GlobalScope.async {
+        val user = players.first { it.role == WerewolfRoles.WEREWOLF }
+
+        val filter = players.filter { it.id != user.id && it.alive }
+        val display = filter.joinToString(
+            prefix = "Who would you like to kill?\n",
+            separator = "\n"
+        ) { "${it.id}: ${it.user.name}" }
+        user.privateChannel.sendMessage(display).queue()
+        val choice = DiscordBot.channel()
+            .filter { it.channel.id == user.privateChannel.id && !it.author.isBot }
+            .mapAsync { filter.first { user -> user.id == it.message.contentDisplay.toInt() } }.await()
+        choice.alive = false
+        narrator.privateChannel.sendMessage("${choice.user.name} was killed last night.").queue()
+    }
+
+    private fun handelInvestAsync() = GlobalScope.async {
+        val user = players.first { it.role == WerewolfRoles.INVESTIGATOR }
+        val filter = players.filter { it.id != user.id && it.alive }
+        val display = filter.joinToString(
+            prefix = "Who would you like to investigate?\n",
+            separator = "\n"
+        ) { "${it.id}: ${it.user.name}" }
+        user.privateChannel.sendMessage(display).queue()
+        val choice = DiscordBot.channel()
+            .filter { it.channel.id == user.privateChannel.id && !it.author.isBot }
+            .mapAsync { filter.first { user -> user.id == it.message.contentDisplay.toInt() } }.await()
+        user.privateChannel.sendMessage("${choice.user.name}'s role is ${choice.role.toString().toLowerCase()}!")
+            .queue()
     }
 
     private fun distributeRoles() {
-        val listIterator = players.shuffled().listIterator()
-
-        listIterator.next().apply {
+        val shuffled = players.shuffled().listIterator()
+        shuffled.next().apply {
             role = WerewolfRoles.WEREWOLF
             privateChannel.sendMessage("You are the werewolf!").queue()
         }
-
-        listIterator.next().apply {
+        shuffled.next().apply {
             role = WerewolfRoles.INVESTIGATOR
             privateChannel.sendMessage("You are the investigator!").queue()
         }
+        shuffled.forEachRemaining { it.privateChannel.sendMessage("You are a villager.").queue() }
 
-        listIterator.forEachRemaining { it.privateChannel.sendMessage("You are a villager.").queue() }
-
-        val rolesDisplay = players.joinToString("\n") { "${it.user.name}: ${it.role.toString().toLowerCase()}" }
-        narratorChannel.sendMessage("Roles for this game:\n${rolesDisplay}").queue()
+        val display = players.joinToString("\n") { "${it.user.name}: ${it.role.toString().toLowerCase()}" }
+        narrator.privateChannel.sendMessage("The roles for this game are:\n${display}").queue()
     }
 
     fun stop() {
@@ -110,6 +167,11 @@ data class WerewolfGame(val channel: MessageChannel) {
     }
 }
 
-class WerewolfUser(val user: User, val privateChannel: PrivateChannel) {
+class WerewolfUser(
+    val id: Int,
+    val user: User,
+    val privateChannel: PrivateChannel
+) {
     var role: WerewolfRoles = WerewolfRoles.VILLAGER
+    var alive = true
 }
