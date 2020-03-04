@@ -19,7 +19,7 @@ enum class WerewolfRoles {
     WEREWOLF,
     VILLAGER,
     INVESTIGATOR
-    
+
 }
 
 data class WerewolfGame(val channel: MessageChannel) {
@@ -54,7 +54,7 @@ data class WerewolfGame(val channel: MessageChannel) {
                     WerewolfUser(
                         userId.getAndIncrement(),
                         it.author,
-                        it.author.openPrivateChannel().completeAfter(10, TimeUnit.SECONDS)
+                        it.author.openPrivateChannel().complete()
                     )
                 }.await()
 
@@ -101,6 +101,16 @@ data class WerewolfGame(val channel: MessageChannel) {
     }
 
     private fun checkWinConditions(): Boolean {
+        if (players.count { it.alive && it.role == WerewolfRoles.VILLAGER } <= players.count { it.alive && it.role == WerewolfRoles.WEREWOLF }){
+            channel.sendMessage("The werewolf's have won! The roles this game were:\n${getRoleDisplay()}").queue()
+            return true
+        }
+
+        if (players.count { it.alive && it.role == WerewolfRoles.WEREWOLF } == 0){
+            channel.sendMessage("The villagers's have won! The roles this game were:\n${getRoleDisplay()}").queue()
+            return true
+        }
+
         return false
     }
 
@@ -158,8 +168,11 @@ data class WerewolfGame(val channel: MessageChannel) {
         }
         shuffled.forEachRemaining { it.privateChannel.sendMessage("You are a villager.").queue() }
 
-        val display = players.joinToString("\n") { "${it.user.name}: ${it.role.toString().toLowerCase()}" }
-        narrator.privateChannel.sendMessage("The roles for this game are:\n${display}").queue()
+        narrator.privateChannel.sendMessage("The roles for this game are:\n${getRoleDisplay()}").queue()
+    }
+
+    private fun getRoleDisplay(){
+        return  players.joinToString("\n") { "${it.user.name}: ${it.role.toString().toLowerCase()}" }
     }
 
     fun stop() {
