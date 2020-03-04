@@ -6,17 +6,22 @@ import net.dv8tion.jda.api.entities.MessageChannel
 import net.dv8tion.jda.api.entities.PrivateChannel
 import net.dv8tion.jda.api.entities.User
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.random.Random
 
 enum class WerewolfRoles {
     WEREWOLF,
     VILLAGER,
-    INVESTIGATOR
+    INVESTIGATOR,
+    DOCTOR
 }
 
 data class WerewolfGame(val channel: MessageChannel) {
 
     private lateinit var job: Job
     private val players = mutableListOf<WerewolfUser>()
+    private val alivePlayers: List<WerewolfUser>
+        get() = players.filter { it.alive }
+
     private lateinit var narrator: WerewolfUser
     private var night = 1
     private var userId = AtomicInteger(1)
@@ -60,14 +65,28 @@ data class WerewolfGame(val channel: MessageChannel) {
                     .queue()
 
                 val handelInvest = handelInvestAsync()
-                val handleWw = handelWWAsync()
 
-                handleWw.await()
+
+                val wwVotes = alivePlayers.filter { it.role == WerewolfRoles.WEREWOLF }.map { handelWWAsync(it) }
+                val healVotes = alivePlayers.filter { it.role == WerewolfRoles.DOCTOR }.map { handelDoctorAsync(it) }
+
                 handelInvest.await()
+
+                val wwAttackedUser = wwVotes.map { it.await() }.groupBy { it?.id }.maxBy { it.value.size }?.let { alivePlayers.firstOrNull { player -> it.key == player.id } }
+                val heals = healVotes.map { it.await() }
+
+                if (heals.any { it.id == wwAttackedUser?.id }){
+                    narrator.sendMessage("${wwAttackedUser!!.user.name} was attacked by the werewolf's but was healed!")
+                }
+                else if(wwAttackedUser != null){
+                    wwAttackedUser.alive = false
+                    narrator.sendMessage("${wwAttackedUser.user.name} was attacked by the werewolf's and died.")
+                }
 
                 if (checkWinConditions()) break
 
-                channel.sendMessage("When discussion and voting are done the narrator will move to the next night.").queue()
+                channel.sendMessage("When discussion and voting are done the narrator will move to the next night.")
+                    .queue()
 
                 handleVoteAsync().await()
                 if (checkWinConditions()) break
@@ -78,12 +97,12 @@ data class WerewolfGame(val channel: MessageChannel) {
     }
 
     private fun checkWinConditions(): Boolean {
-        if (players.count { it.alive && it.role == WerewolfRoles.VILLAGER } <= players.count { it.alive && it.role == WerewolfRoles.WEREWOLF }){
+        if (alivePlayers.count { it.role == WerewolfRoles.WEREWOLF } == alivePlayers.size) {
             channel.sendMessage("The werewolf's have won! The roles this game were:\n${getRoleDisplay()}").queue()
             return true
         }
 
-        if (players.count { it.alive && it.role == WerewolfRoles.WEREWOLF } == 0){
+        if (alivePlayers.count { it.role == WerewolfRoles.WEREWOLF } == 0) {
             channel.sendMessage("The villagers's have won! The roles this game were:\n${getRoleDisplay()}").queue()
             return true
         }
@@ -92,71 +111,90 @@ data class WerewolfGame(val channel: MessageChannel) {
     }
 
     private fun handleVoteAsync() = GlobalScope.async {
-        val display = players.filter { it.alive }.joinToString(
-            prefix = "Who was hung?(0 to skip)\n",
-            separator = "\n"
-        ) { "${it.id}: ${it.user.name}" }
+        val validPlayers = alivePlayers
 
-        narrator.privateChannel.sendMessage(display).queue()
-
-        val choice = DiscordBot.channel()
-            .filter { it.channel.id == narrator.privateChannel.id }
-            .mapAsync {
-                if (it.message.contentDisplay == "0") return@mapAsync null
-                players.first { user -> user.id == it.message.contentDisplay.toInt() }
-            }.await()
+        val choice = DiscordBot.getInputAsync(
+            narrator.privateChannel,
+            validPlayers.toPrompt("Who was hung? (0 to skip)")
+        ) {
+            if (it.message.contentDisplay == "0") return@getInputAsync null
+            validPlayers.first { user -> user.id == it.message.contentDisplay.toInt() }
+        }
 
         choice?.alive = false
     }
 
-    private fun handelWWAsync() = GlobalScope.async {
-        val user = players.first { it.role == WerewolfRoles.WEREWOLF }
+    private  fun handelWWAsync(user: WerewolfUser) = GlobalScope.async {
+        val validPlayers = alivePlayers.filter { it.role != WerewolfRoles.WEREWOLF }
+        DiscordBot.getInputAsync(
+            user.privateChannel,
+            validPlayers.toPrompt("Who would you like to attack?")
+        ) { validPlayers.first { user -> user.id == it.message.contentDisplay.toInt() } }
+    }
 
-        val filter = players.filter { it.id != user.id && it.alive }
-        val display = filter.joinToString(
-            prefix = "Who would you like to kill?\n",
-            separator = "\n"
-        ) { "${it.id}: ${it.user.name}" }
-        user.privateChannel.sendMessage(display).queue()
-        val choice = DiscordBot.channel()
-            .filter { it.channel.id == user.privateChannel.id && !it.author.isBot }
-            .mapAsync { filter.first { user -> user.id == it.message.contentDisplay.toInt() } }.await()!!
-        choice.alive = false
-        narrator.privateChannel.sendMessage("${choice.user.name} was killed last night.").queue()
+    private fun handelDoctorAsync(user: WerewolfUser) = GlobalScope.async {
+        val validPlayers = alivePlayers.filter { it.id != user.id || user.specialActionsRemaining > 0 }
+
+        val choice = DiscordBot.getInputAsync(
+            user.privateChannel,
+            validPlayers.toPrompt("Who would you like to heal? You have ${user.specialActionsRemaining} self heals left.")
+        ) { validPlayers.first { user -> user.id == it.message.contentDisplay.toInt() } }!!
+
+        if (choice.id == user.id) user.specialActionsRemaining--
+
+        return@async choice
     }
 
     private fun handelInvestAsync() = GlobalScope.async {
-        val user = players.first { it.role == WerewolfRoles.INVESTIGATOR }
-        val filter = players.filter { it.id != user.id && it.alive }
-        val display = filter.joinToString(
-            prefix = "Who would you like to investigate?\n",
+        for (user in alivePlayers.filter { it.role == WerewolfRoles.INVESTIGATOR }) {
+            val validPlayers = alivePlayers.filter { it.id != user.id }
+
+            launch {
+                val choice = DiscordBot.getInputAsync(
+                    user.privateChannel,
+                    validPlayers.toPrompt("Who would you like to investigate?")
+                ) { validPlayers.first { user -> user.id == it.message.contentDisplay.toInt() } }!!
+
+                narrator.sendMessage("${choice.user.name} was investigated.")
+                user.sendMessage("${choice.user.name}'s role is ${choice.role.toString().toLowerCase()}!")
+            }
+        }
+    }
+
+    private fun Collection<WerewolfUser>.toPrompt(question: String): String {
+        return joinToString(
+            prefix = "${question}\n",
             separator = "\n"
         ) { "${it.id}: ${it.user.name}" }
-        user.privateChannel.sendMessage(display).queue()
-        val choice = DiscordBot.channel()
-            .filter { it.channel.id == user.privateChannel.id && !it.author.isBot }
-            .mapAsync { filter.first { user -> user.id == it.message.contentDisplay.toInt() } }.await()!!
-        user.privateChannel.sendMessage("${choice.user.name}'s role is ${choice.role.toString().toLowerCase()}!")
-            .queue()
     }
 
     private fun distributeRoles() {
         val shuffled = players.shuffled().listIterator()
         shuffled.next().apply {
             role = WerewolfRoles.WEREWOLF
-            privateChannel.sendMessage("You are the werewolf!").queue()
+            sendMessage("You are the werewolf!")
         }
-        shuffled.next().apply {
-            role = WerewolfRoles.INVESTIGATOR
-            privateChannel.sendMessage("You are the investigator!").queue()
-        }
-        shuffled.forEachRemaining { it.privateChannel.sendMessage("You are a villager.").queue() }
 
-        narrator.privateChannel.sendMessage("The roles for this game are:\n${getRoleDisplay()}").queue()
+        if (Random.nextBoolean()) {
+            shuffled.next().apply {
+                role = WerewolfRoles.INVESTIGATOR
+                sendMessage("You are the investigator!")
+            }
+        } else {
+            shuffled.next().apply {
+                role = WerewolfRoles.DOCTOR
+                specialActionsRemaining = 1
+                sendMessage("You are the doctor!")
+            }
+        }
+
+        shuffled.forEachRemaining { it.sendMessage("You are a villager.") }
+
+        narrator.sendMessage("The roles for this game are:\n${getRoleDisplay()}")
     }
 
     private fun getRoleDisplay(): String {
-        return  players.joinToString("\n") { "${it.user.name}: ${it.role.toString().toLowerCase()}" }
+        return players.joinToString("\n") { "${it.user.name}: ${it.role.toString().toLowerCase()}" }
     }
 
     fun stop() {
@@ -169,6 +207,12 @@ class WerewolfUser(
     val user: User,
     val privateChannel: PrivateChannel
 ) {
+
     var role: WerewolfRoles = WerewolfRoles.VILLAGER
     var alive = true
+    var specialActionsRemaining = 0
+
+    fun sendMessage(message: String) {
+        privateChannel.sendMessage(message).queue()
+    }
 }
