@@ -26,7 +26,7 @@ class KChannel {
         first()
     }
 
-    fun <T> mapAsync(transformer: (MessageReceivedEvent) -> T) = GlobalScope.async<T> {
+    fun <T> mapAsync(transformer: (MessageReceivedEvent) -> T?) = GlobalScope.async<T?> {
         while (isActive) {
             try {
                 return@async transformer.invoke(first())

@@ -15,7 +15,7 @@ object Werewolf {
         GlobalScope.launch {
             while (true) {
                 val event = DiscordBot.channel()
-                    .filter { it.message.contentDisplay.startsWith("!werewolf new game") }
+                    .filter { it.message.contentDisplay.startsWith("!ww new game") }
                     .firstAsync().await()
                 games[event.channel.id]?.stop()
                 games[event.channel.id] = WerewolfGame(event.channel).apply { start() }
