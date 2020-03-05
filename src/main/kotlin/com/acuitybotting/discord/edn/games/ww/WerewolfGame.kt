@@ -4,10 +4,14 @@ import club.minnced.jda.reactor.on
 import com.acuitybotting.discord.edn.jda.Discord
 import com.acuitybotting.discord.edn.jda.getInput
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.reactive.asFlow
 import kotlinx.coroutines.reactive.awaitFirst
+import kotlinx.coroutines.reactive.collect
 import net.dv8tion.jda.api.entities.MessageChannel
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent
-import reactor.core.Disposable
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.random.Random
 
@@ -28,17 +32,17 @@ data class WerewolfGame(val channel: MessageChannel) {
             channel.sendMessage("Starting the game now! Type '!ww join' to join as a player. Once everyone has joined the narrator should type '!ww narrator' to start the game.")
                 .queue()
 
-            val joinJob = listenForPlayers()
+            val joinJob = launch(job) { listenForPlayers() }
 
             narrator = getNarrator()
-            joinJob.dispose()
+            joinJob.cancel()
             channel.sendMessage("${narrator.name} became the narrator and started the game. Roles will be distributed now.")
                 .queue()
 
             distributeRoles()
 
             while (isActive) {
-                channel.sendMessage("It is night ${night}! If you have a role you will be pmed instructions now!")
+                channel.sendMessage("It is night ${night}! If you have a role you will be sent instructions now!")
                     .queue()
 
                 val werewolfJobs = alivePlayers
@@ -98,14 +102,16 @@ data class WerewolfGame(val channel: MessageChannel) {
                     -1,
                     event.author
                 )
-            }.filter { it != null }.awaitFirst()!!
+            }
+            .filter { it != null }
+            .awaitFirst()!!
     }
 
-    private fun listenForPlayers(): Disposable {
+    private suspend fun listenForPlayers() {
         val userId = AtomicInteger(1)
         return Discord.on<MessageReceivedEvent>()
             .filter { it.message.contentDisplay.startsWith("!ww join", true) }
-            .subscribe { event ->
+            .collect { event ->
                 if (players.any { it.user.id == event.author.id }) {
                     channel.sendMessage("You've already joined the game.").queue()
                 } else {
@@ -132,9 +138,13 @@ data class WerewolfGame(val channel: MessageChannel) {
     private suspend fun handleDay() {
         val validPlayers = alivePlayers
 
-        narrator.sendMessage("Who was hung? (0 to skip)")
+        narrator.sendMessage(
+            "Inform the town about what happened last night and hold a vote to hang someone. Select who was hung or type 'skip'. Here is a list of alive players ${alivePlayers.joinToString(
+                separator = ", "
+            ) { it.name }}."
+        )
         val choice = narrator.privateChannel?.getInput {
-            if (it.message.contentDisplay == "0") return@getInput null
+            if (it.message.contentDisplay == "skip") return@getInput null
             validPlayers.first { user -> user.id == it.message.contentDisplay.toInt() }
         }
 
@@ -170,14 +180,11 @@ data class WerewolfGame(val channel: MessageChannel) {
         val choice =
             user.privateChannel?.getInput { validPlayers.first { user -> user.id == it.message.contentDisplay.toInt() } }!!
         narrator.sendMessage("${choice.name} was investigated.")
-        user.sendMessage("${choice.name}'s role is ${choice.role.toString().toLowerCase()}!")
+        user.sendMessage("${choice.name}'s role is ${choice.role}!")
     }
 
-    private fun Collection<WerewolfUser>.toPrompt(question: String): String {
-        return joinToString(
-            prefix = "${question}\n",
-            separator = "\n"
-        ) { "${it.id}: ${it.name}" }
+    private fun Collection<WerewolfUser>.toPrompt(prompt: String): String {
+        return joinToString(prefix = "${prompt}\n", separator = "\n") { "${it.id}: ${it.name}" }
     }
 
     private fun distributeRoles() {
@@ -207,7 +214,7 @@ data class WerewolfGame(val channel: MessageChannel) {
     }
 
     private fun getRoleDisplay(): String {
-        return players.joinToString("\n") { "${it.name}: ${it.role.toString().toLowerCase()}" }
+        return players.joinToString("\n") { "${it.name}: ${it.role}" }
     }
 
     fun stop() {

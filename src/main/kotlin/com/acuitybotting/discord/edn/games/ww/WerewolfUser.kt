@@ -37,6 +37,4 @@ class WerewolfUser(
     override fun hashCode(): Int {
         return id
     }
-
-
 }

@@ -4,5 +4,9 @@ enum class WerewolfRoles {
     WEREWOLF,
     VILLAGER,
     INVESTIGATOR,
-    DOCTOR
+    DOCTOR;
+
+    override fun toString(): String {
+        return super.toString().toLowerCase()
+    }
 }
