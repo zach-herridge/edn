@@ -4,10 +4,6 @@ import club.minnced.jda.reactor.on
 import com.acuitybotting.discord.edn.jda.Discord
 import com.acuitybotting.discord.edn.jda.getInput
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.onCompletion
-import kotlinx.coroutines.reactive.asFlow
 import kotlinx.coroutines.reactive.awaitFirst
 import kotlinx.coroutines.reactive.collect
 import net.dv8tion.jda.api.entities.MessageChannel
@@ -29,21 +25,18 @@ data class WerewolfGame(val channel: MessageChannel) {
 
     fun start() {
         job = GlobalScope.launch {
-            channel.sendMessage("Starting the game now! Type '!ww join' to join as a player. Once everyone has joined the narrator should type '!ww narrator' to start the game.")
-                .queue()
+            broadcast("Starting the game now! Type '!ww join' to join as a player. Once everyone has joined the narrator should type '!ww narrator' to start the game.")
 
             val joinJob = launch(job) { listenForPlayers() }
 
             narrator = getNarrator()
             joinJob.cancel()
-            channel.sendMessage("${narrator.name} became the narrator and started the game. Roles will be distributed now.")
-                .queue()
+            broadcast("${narrator.name} became the narrator and started the game. Roles will be distributed now.")
 
             distributeRoles()
 
             while (isActive) {
-                channel.sendMessage("It is night ${night}! If you have a role you will be sent instructions now!")
-                    .queue()
+                alivePlayers.forEach { it.sendMessage("It is night ${night}! If you have a role you will be sent instructions now!") }
 
                 val werewolfJobs = alivePlayers
                     .filter { it.role == WerewolfRoles.WEREWOLF }
@@ -75,14 +68,16 @@ data class WerewolfGame(val channel: MessageChannel) {
                     }
                 }
 
-                if (checkWinConditions()) break
-                channel.sendMessage("The night is over listen to the narrator to find out what happened and discuss any votes you would like to start now.")
-                    .queue()
+                if (gameDecided()) break
+
                 handleDay()
-                if (checkWinConditions()) break
+
+                if (gameDecided()) break
 
                 night++
             }
+
+            broadcast("The game is over thanks for playing!")
         }
     }
 
@@ -93,8 +88,7 @@ data class WerewolfGame(val channel: MessageChannel) {
                 players.removeIf { it.id == narrator.id }
 
                 if (players.size < 4) {
-                    channel.sendMessage("There must be at least four players for the game to begin. Once there are four players try again.")
-                        .queue()
+                    broadcast("There must be at least four players for the game to begin. Once there are four players try again.")
                     return@map null
                 }
 
@@ -113,22 +107,22 @@ data class WerewolfGame(val channel: MessageChannel) {
             .filter { it.message.contentDisplay.startsWith("!ww join", true) }
             .collect { event ->
                 if (players.any { it.user.id == event.author.id }) {
-                    channel.sendMessage("You've already joined the game.").queue()
+                    broadcast("You've already joined the game.")
                 } else {
                     players.add(WerewolfUser(userId.getAndIncrement(), event.author))
-                    channel.sendMessage("${event.author.name} joined the game as a player!").queue()
+                    broadcast("${event.author.name} joined the game as a player!")
                 }
             }
     }
 
-    private fun checkWinConditions(): Boolean {
+    private fun gameDecided(): Boolean {
         if (alivePlayers.all { it.role == WerewolfRoles.WEREWOLF }) {
-            channel.sendMessage("Werewolfs win! The roles this game were:\n${getRoleDisplay()}").queue()
+            players.forEach { it.sendMessage("Werewolfs win! The roles this game were:\n${getRoleDisplay()}") }
             return true
         }
 
         if (alivePlayers.none { it.role == WerewolfRoles.WEREWOLF }) {
-            channel.sendMessage("Villagers win! The roles this game were:\n${getRoleDisplay()}").queue()
+            players.forEach { it.sendMessage("Villagers win! The roles this game were:\n${getRoleDisplay()}") }
             return true
         }
 
@@ -137,6 +131,7 @@ data class WerewolfGame(val channel: MessageChannel) {
 
     private suspend fun handleDay() {
         val validPlayers = alivePlayers
+        validPlayers.forEach { it.sendMessage("The night is over listen to the narrator to find out what happened and discuss any votes you would like to start now.") }
 
         narrator.sendMessage(
             "Inform the town about what happened last night and hold a vote to hang someone. Select who was hung or type 'skip'. Here is a list of alive players ${alivePlayers.joinToString(
@@ -162,25 +157,24 @@ data class WerewolfGame(val channel: MessageChannel) {
         return choice
     }
 
-    private suspend fun getHeal(user: WerewolfUser): WerewolfUser? {
-        val validPlayers = alivePlayers.filter { it != user || user.specialActionsRemaining > 0 }
+    private suspend fun getHeal(doctor: WerewolfUser): WerewolfUser? {
+        val validPlayers = alivePlayers.filter { it != doctor || doctor.specialActionsRemaining > 0 }
         if (validPlayers.isEmpty()) return null
-        user.sendMessage(validPlayers.toPrompt("Who would you like to heal? You have ${user.specialActionsRemaining} self heals left."))
+        doctor.sendMessage(validPlayers.toPrompt("Who would you like to heal? You have ${doctor.specialActionsRemaining} self heals left."))
         val choice =
-            user.privateChannel?.getInput { validPlayers.first { user -> user.id == it.message.contentDisplay.toInt() } }!!
-        if (choice == user) user.specialActionsRemaining--
-        user.sendMessage("You choose to heal ${choice.name}.")
+            doctor.privateChannel?.getInput { validPlayers.first { user -> user.id == it.message.contentDisplay.toInt() } }!!
+        if (choice == doctor) doctor.specialActionsRemaining--
+        doctor.sendMessage("You choose to heal ${choice.name}.")
         return choice
     }
 
-    private suspend fun handelInvestigate(user: WerewolfUser) {
-        val validPlayers = alivePlayers.filter { it != user }
+    private suspend fun handelInvestigate(investigator: WerewolfUser) {
+        val validPlayers = alivePlayers.filter { it != investigator }
         if (validPlayers.isEmpty()) return
-        user.sendMessage(validPlayers.toPrompt("Who would you like to investigate?"))
+        investigator.sendMessage(validPlayers.toPrompt("Who would you like to investigate?"))
         val choice =
-            user.privateChannel?.getInput { validPlayers.first { user -> user.id == it.message.contentDisplay.toInt() } }!!
-        narrator.sendMessage("${choice.name} was investigated.")
-        user.sendMessage("${choice.name}'s role is ${choice.role}!")
+            investigator.privateChannel?.getInput { validPlayers.first { user -> user.id == it.message.contentDisplay.toInt() } }!!
+        investigator.sendMessage("${choice.name}'s role is ${choice.role}!")
     }
 
     private fun Collection<WerewolfUser>.toPrompt(prompt: String): String {
@@ -213,6 +207,10 @@ data class WerewolfGame(val channel: MessageChannel) {
         narrator.sendMessage("The roles for this game are:\n${getRoleDisplay()}")
     }
 
+    private fun broadcast(message: String){
+        channel.sendMessage(message).queue()
+    }
+
     private fun getRoleDisplay(): String {
         return players.joinToString("\n") { "${it.name}: ${it.role}" }
     }
@@ -221,4 +219,3 @@ data class WerewolfGame(val channel: MessageChannel) {
         job.cancel()
     }
 }
-
