@@ -57,10 +57,10 @@ data class WerewolfGame(val channel: MessageChannel) {
                     .maxBy { it.value.size }
                     .let { it?.key }
 
-                val heals = doctorJobs.mapNotNull { it.await() }
+                val healedPlayers = doctorJobs.mapNotNull { it.await() }
 
                 if (wwAttackedUser != null) {
-                    if (heals.contains(wwAttackedUser)) {
+                    if (healedPlayers.contains(wwAttackedUser)) {
                         narrator.sendMessage("${wwAttackedUser.name} was attacked by a werewolf but was healed!")
                     } else {
                         wwAttackedUser.alive = false
@@ -197,7 +197,7 @@ data class WerewolfGame(val channel: MessageChannel) {
         } else {
             shuffled.next().apply {
                 role = WerewolfRoles.DOCTOR
-                specialActionsRemaining = 1
+                specialActionsRemaining = 2
                 sendMessage("You are a doctor!")
             }
         }
