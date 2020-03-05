@@ -1,25 +1,19 @@
 package com.acuitybotting.discord.edn.games.ww
 
-import com.acuitybotting.discord.edn.DiscordBot
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.async
-import kotlinx.coroutines.flow.asFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
+import club.minnced.jda.reactor.on
+import com.acuitybotting.discord.edn.jda.Discord
+import net.dv8tion.jda.api.events.message.MessageReceivedEvent
 
 object Werewolf {
 
     private val games = mutableMapOf<String, WerewolfGame>()
 
-    fun start() {
-        GlobalScope.launch {
-            while (true) {
-                val event = DiscordBot.channel()
-                    .filter { it.message.contentDisplay.startsWith("!ww new game") }
-                    .firstAsync().await()
-                games[event.channel.id]?.stop()
-                games[event.channel.id] = WerewolfGame(event.channel).apply { start() }
+    fun add() {
+        Discord.on<MessageReceivedEvent>()
+            .filter { it.message.contentDisplay.startsWith("!ww new game") }
+            .subscribe {
+                games[it.channel.id]?.stop()
+                games[it.channel.id] = WerewolfGame(it.channel).apply { start() }
             }
-        }
     }
 }

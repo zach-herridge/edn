@@ -1,44 +1,23 @@
 package com.acuitybotting.discord.edn.jda
 
-import com.acuitybotting.discord.edn.DiscordBot
-import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.async
-import kotlinx.coroutines.channels.BroadcastChannel
-import kotlinx.coroutines.flow.asFlow
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.isActive
+import club.minnced.jda.reactor.onMessage
+import kotlinx.coroutines.reactive.awaitFirstOrNull
+import net.dv8tion.jda.api.JDA
 import net.dv8tion.jda.api.entities.MessageChannel
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent
+import reactor.core.publisher.toMono
 
+suspend fun <T : Any> MessageChannel.getInput(userId: String? = null, block: (MessageReceivedEvent) -> T?): T? {
+    return onMessage()
+        .filter { !it.author.isBot }
+        .filter { userId == null || it.author.id == userId }
+        .map { block.invoke(it) }
+        .doOnError { sendMessage("Invalid input: ${it.localizedMessage}").queue() }
+        .retry(100)
+        .toMono().awaitFirstOrNull()
+}
 
-class KChannel {
+object JdaExtensions {
 
-    val filters = mutableListOf<(MessageReceivedEvent) -> Boolean>()
-
-    fun filter(predicate: (MessageReceivedEvent) -> Boolean): KChannel {
-        filters.add(predicate)
-        return this
-    }
-
-    fun firstAsync() = GlobalScope.async {
-        first()
-    }
-
-    fun <T> mapAsync(transformer: (MessageReceivedEvent) -> T?) = GlobalScope.async<T?> {
-        while (isActive) {
-            try {
-                return@async transformer.invoke(first())
-            } catch (e: Throwable) {
-                e.printStackTrace()
-            }
-        }
-
-        throw IllegalStateException()
-    }
-
-    private suspend fun first(): MessageReceivedEvent {
-        return DiscordBot.messages.asFlow().first { filters.all { filter -> filter.invoke(it) } }
-    }
+    lateinit var jda: JDA
 }
