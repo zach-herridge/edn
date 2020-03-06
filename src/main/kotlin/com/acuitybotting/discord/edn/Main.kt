@@ -3,6 +3,7 @@ package com.acuitybotting.discord.edn
 import club.minnced.jda.reactor.asMono
 import club.minnced.jda.reactor.createManager
 import club.minnced.jda.reactor.on
+import com.acuitybotting.discord.edn.games.cah.Cah
 import com.acuitybotting.discord.edn.games.ww.Werewolf
 import com.acuitybotting.discord.edn.jda.JdaExtensions
 import net.dv8tion.jda.api.JDABuilder
@@ -53,7 +54,8 @@ fun main(args: Array<String>) {
         .setDisabledCacheFlags(EnumSet.allOf(CacheFlag::class.java))
         .setRateLimitPool(executor)
         .setGatewayPool(executor)
-        .build().awaitReady()
+        .build()
 
     Werewolf.add()
+    Cah.add()
 }
